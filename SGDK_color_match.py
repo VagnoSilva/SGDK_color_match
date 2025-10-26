@@ -177,13 +177,17 @@ class ColorMatcherApp:
             frame = self.color_frames[i]
             entry = self.color_entries[i]
             frame.config(bg="#" + hex_color)
-            entry.config(state="normal")
+            entry.config(state="normal")          # permite escrever temporariamente
             entry.delete(0, tk.END)
             entry.insert(0, hex_color)
-            entry.config(state="disabled")  # volta a desativar após preencher
-            # Permitir seleção ao clicar
-            entry.bind("<Button-1>", lambda e, en=entry: en.select_range(0, tk.END))
-            frame.bind("<Button-1>", lambda e, en=entry: en.select_range(0, tk.END))
+            entry.config(state="readonly")        # agora é somente leitura (mas selecionável!)
+            # Garantir que o clique selecione o texto
+            entry.bind("<Button-1>", lambda e, en=entry: self.select_all_readonly(en))
+            frame.bind("<Button-1>", lambda e, en=entry: self.select_all_readonly(en))
+
+    def select_all_readonly(self, entry):
+        entry.focus()
+        entry.select_range(0, tk.END)
 
 # --- Execução ---
 if __name__ == "__main__":
