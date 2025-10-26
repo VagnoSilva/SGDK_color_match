@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import messagebox
+import math
 
 # ========== PALETA DE REFERÊNCIA (512 cores 3-3-3 bits) ==========
 palette_hex = [
@@ -69,28 +70,70 @@ palette_hex = [
     "ff00ff", "ff24ff", "ff48ff", "ff6cff", "ff90ff", "ffb4ff", "ffd8ff", "ffffff"
 ]
 
+# --- Conversão RGB <-> HEX ---
 def hex_to_rgb(hex_str):
     return tuple(int(hex_str[i:i+2], 16) for i in (0, 2, 4))
 
 def rgb_to_hex(rgb):
     return "{:02x}{:02x}{:02x}".format(*rgb)
 
-def closest_colors(rgb_input, palette, num=5):
-    r1, g1, b1 = rgb_input
+# --- Conversão sRGB -> Linear RGB ---
+def srgb_to_linear(c):
+    c = c / 255.0
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+# --- Conversão RGB -> XYZ (D65) ---
+def rgb_to_xyz(r, g, b):
+    r, g, b = srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)
+    x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b
+    y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b
+    z = 0.0193339 * r + 0.1191920 * g + 0.9503041 * b
+    return x, y, z
+
+# --- Conversão XYZ -> OkLab ---
+def xyz_to_oklab(x, y, z):
+    l = 0.4122214708 * x + 0.5363325363 * y + 0.0514459929 * z
+    m = 0.2119034982 * x + 0.6806995451 * y + 0.1073969566 * z
+    s = 0.0883024619 * x + 0.2817188376 * y + 0.6299787005 * z
+
+    # Evitar raiz cúbica de número negativo (proteção mínima)
+    l_ = math.copysign(abs(l) ** (1/3), l)
+    m_ = math.copysign(abs(m) ** (1/3), m)
+    s_ = math.copysign(abs(s) ** (1/3), s)
+
+    L = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_
+    a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_
+    b = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
+    return L, a, b
+
+# --- RGB -> OkLab (pipeline completo) ---
+def rgb_to_oklab(r, g, b):
+    x, y, z = rgb_to_xyz(r, g, b)
+    return xyz_to_oklab(x, y, z)
+
+# --- Encontrar cores mais próximas usando OkLab ---
+def closest_colors_oklab(rgb_input, palette, num=5):
+    lab_input = rgb_to_oklab(*rgb_input)
     distances = []
     for hex_color in palette:
-        r2, g2, b2 = hex_to_rgb(hex_color)
-        dist = (r1 - r2)**2 + (g1 - g2)**2 + (b1 - b2)**2
-        distances.append((dist, (r2, g2, b2)))
+        r, g, b = hex_to_rgb(hex_color)
+        try:
+            lab = rgb_to_oklab(r, g, b)
+            dist = sum((a - b) ** 2 for a, b in zip(lab_input, lab))
+            distances.append((dist, (r, g, b)))
+        except Exception:
+            # Em caso raro de erro numérico, pula (não deve ocorrer com cores válidas)
+            continue
     distances.sort(key=lambda x: x[0])
     return [c for d, c in distances[:num]]
 
+# --- Interface Gráfica ---
 class ColorMatcherApp:
     def __init__(self, root):
         self.root = root
-        root.title("Cores Equivalentes SGDK")
-        root.geometry("350x210")       # <-- define tamanho da janela
-        root.resizable(False, False)    # impede redimensionamento
+        root.title("Cores Equivalentes SGDK (OkLab)")
+        root.geometry("350x210")
+        root.resizable(False, False)
 
         tk.Label(root, text="Digite a cor em HEX sem # (ex: FF8800):").pack(pady=5)
         self.entry = tk.Entry(root)
@@ -101,7 +144,6 @@ class ColorMatcherApp:
         self.result_frame = tk.Frame(root)
         self.result_frame.pack(pady=10)
 
-        # === ADIÇÃO: cria 5 blocos desativados visíveis ===
         self.bg_color = root.cget("bg")
         self.color_frames = []
         self.color_entries = []
@@ -110,27 +152,26 @@ class ColorMatcherApp:
             frame = tk.Frame(self.result_frame, width=60, height=40,
                              bg=self.bg_color, relief="sunken", bd=2)
             frame.grid(row=0, column=i, padx=5)
+            frame.pack_propagate(False)  # mantém o tamanho fixo
             entry = tk.Entry(self.result_frame, width=8, font=("Arial", 10),
                              state="disabled", disabledbackground=self.bg_color)
             entry.grid(row=1, column=i, pady=2)
             self.color_frames.append(frame)
             self.color_entries.append(entry)
-        # ================================================
 
     def match_color(self):
-        hex_input = self.entry.get().strip()
+        hex_input = self.entry.get().strip().upper()
         if len(hex_input) != 6:
             messagebox.showerror("Erro", "Digite um valor HEX válido (6 caracteres).")
             return
         try:
             rgb_input = hex_to_rgb(hex_input)
-        except:
+        except ValueError:
             messagebox.showerror("Erro", "Valor HEX inválido.")
             return
 
-        closest = closest_colors(rgb_input, palette_hex, num=5)
+        closest = closest_colors_oklab(rgb_input, palette_hex, num=5)
 
-        # === substitui apenas o conteúdo dos blocos ===
         for i, color in enumerate(closest):
             hex_color = rgb_to_hex(color).upper()
             frame = self.color_frames[i]
@@ -139,10 +180,13 @@ class ColorMatcherApp:
             entry.config(state="normal")
             entry.delete(0, tk.END)
             entry.insert(0, hex_color)
+            entry.config(state="disabled")  # volta a desativar após preencher
+            # Permitir seleção ao clicar
             entry.bind("<Button-1>", lambda e, en=entry: en.select_range(0, tk.END))
             frame.bind("<Button-1>", lambda e, en=entry: en.select_range(0, tk.END))
-        # ===============================================
 
-root = tk.Tk()
-app = ColorMatcherApp(root)
-root.mainloop()
+# --- Execução ---
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = ColorMatcherApp(root)
+    root.mainloop()
